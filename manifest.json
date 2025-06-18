@@ -1,0 +1,14 @@
+{
+  "domain": "home-assistant-cloudflare-ai-conversation-agent",
+  "name": "cloudflare ai conversation assistant",
+  "codeowners": ["@bryanconradhart"],
+  "config_flow": true,
+  "dependencies": ["conversation"],
+  "after_dependencies": ["assist_pipeline", "intent"],
+  "documentation": "https://www.home-assistant.io/integrations/cloudflare_ai",
+  "iot_class": "cloud_polling",
+  "integration_type": "service",
+  "quality_scale": "bronze",
+  "requirements": ["cloudflare~=4.2.0"],
+  "version": "0.1.0"
+}
