@@ -5,10 +5,10 @@
   "config_flow": true,
   "dependencies": ["conversation"],
   "after_dependencies": ["assist_pipeline", "intent"],
-  "documentation": "https://www.home-assistant.io/integrations/cloudflare_ai",
+  "documentation": "https://www.home-assistant.io/integrations/home-assistant-cloudflare-ai-conversation-agent",
   "iot_class": "cloud_polling",
   "integration_type": "service",
   "quality_scale": "bronze",
-  "requirements": ["cloudflare~=4.2.0"],
+  "requirements": ["cloudflare~=4.3.1"],
   "version": "0.1.0"
 }

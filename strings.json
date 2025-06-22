@@ -1,0 +1,41 @@
+{
+  "title": "Cloudflare AI Conversation Agent",
+  "config": {
+    "flow_title": "{name}",
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid authentication",
+      "rate_limit_exceeded": "Rate limit exceeded. Please try again later.",
+      "unknown_api_error": "Unknown API error: code: {code}, message: {message}",
+      "no_models": "Cannot find supported models. Please check that your API token has 'Workers AI:Read' permissions.",
+      "no_accounts": "No accounts found. Please check that your API token has 'Account:Read' permissions.",
+      "insufficient_permission_account": "Insufficient permission to access the requested resource. Please check that your API token has 'Account:Read' permissions.",
+      "insufficient_permission_model": "Insufficient permission to access the requested resource. Please check that your API token has 'Workers AI:Read' permissions.",
+      "insufficient_permission_ai_run": "Insufficient permission to access the requested resource. Please check that your API token has 'Workers AI:Edit' permissions.",
+      "unknown": "Unexpected error"
+    },
+    "step": {
+      "user": {
+        "title": "Cloudflare API Token",
+        "description": "Enter your Cloudflare API token. This token must have permissions to list accounts, list AI models, and run AI completions. Recommended: Use a token with the 'Account:Read', 'Workers AI:Read', and 'Workers AI:Edit' permissions for your account. You can create a token at {token_doc_url}. The token will be validated before you can continue.",
+        "data": {
+          "api_token": "[%key:common::config_flow::data::api_token%]"
+        }
+      },
+      "account": {
+        "title": "Select Cloudflare Account",
+        "description": "Choose the Cloudflare account to use for AI completions.",
+        "data": {
+          "account_id": "Account"
+        }
+      },
+      "model": {
+        "title": "Select Model",
+        "description": "Pick a model to use. See supported models at {model_doc_url} and model pricing at {pricing_doc_url}.",
+        "data": {
+          "model": "Model"
+        }
+      }
+    }
+  }
+}
