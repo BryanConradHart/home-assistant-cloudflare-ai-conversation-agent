@@ -7,6 +7,7 @@ from typing import Literal
 
 from homeassistant.components import conversation
 from homeassistant.components.conversation import ChatLog, ConversationResult
+from homeassistant.components.conversation.chat_log import AssistantContent
 from homeassistant.components.conversation.models import ConversationInput
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_LLM_HASS_API, MATCH_ALL
@@ -14,7 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.intent import IntentResponse
 
-from .const import CONF_API_TOKEN, CONF_MODEL, DOMAIN
+from .const import CONF_API_TOKEN, CONF_MODEL, CONF_PROMPT, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -98,7 +99,17 @@ class CloudflareAIConversationEntity(
     ) -> ConversationResult:
         """Relay the user phrase to Cloudflare AI and return the completion, with history as context."""
         settings = {**self.entry.data, **self.entry.options}
-        model = settings.get(CONF_MODEL, "@cf/meta/llama-3-8b-instruct")
+        api_token = settings.get(CONF_API_TOKEN)
+        if not api_token:
+            response = IntentResponse(language=user_input.language)
+            response.async_set_speech("Cloudflare API token is not configured")
+            return ConversationResult(
+                response=response,
+                conversation_id=chat_log.conversation_id,
+                continue_conversation=False,
+            )
+
+        model = settings.get(CONF_MODEL)
         if not model:
             response = IntentResponse(language=user_input.language)
             response.async_set_speech("Cloudflare model is not configured")
@@ -117,20 +128,36 @@ class CloudflareAIConversationEntity(
                 conversation_id=chat_log.conversation_id,
                 continue_conversation=False,
             )
+        try:
+            await chat_log.async_update_llm_data(
+                DOMAIN,
+                user_input,
+                settings.get(CONF_LLM_HASS_API),
+                settings.get(CONF_PROMPT),
+            )
+        except conversation.ConverseError as err:
+            return err.as_conversation_result()
 
-        # Build the full prompt with history
-        prompt = self._format_history(chat_log)
-
+        # Build the full chat history as a list of OpenAI messages
+        messages = [
+            {"role": c.role, "content": c.content}
+            for c in chat_log.content
+            if hasattr(c, "role") and hasattr(c, "content")
+        ]
         try:
             completion = await client.chat.completions.create(
                 model=model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 stream=False,
-                extra_headers={
-                    "cf-aig-authorization": f"Bearer {settings.get(CONF_API_TOKEN)}"
-                },
+                extra_headers={"cf-aig-authorization": f"Bearer {api_token}"},
             )
             response_text = completion.choices[0].message.content
+            chat_log.async_add_assistant_content_without_tools(
+                AssistantContent(
+                    content=response_text,
+                    agent_id=user_input.agent_id,
+                )
+            )
         except Exception as e:
             response_text = f"Error communicating with Cloudflare AI: {e}"
 
