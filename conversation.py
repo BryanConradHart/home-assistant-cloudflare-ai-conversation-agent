@@ -145,6 +145,7 @@ class CloudflareAIConversationEntity(
             if hasattr(c, "role") and hasattr(c, "content")
         ]
         try:
+            # extra headers required for Cloudflare AI Gateway
             completion = await client.chat.completions.create(
                 model=model,
                 messages=messages,

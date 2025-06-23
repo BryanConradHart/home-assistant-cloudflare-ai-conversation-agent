@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import cloudflare
 from cloudflare import AsyncCloudflare
 import voluptuous as vol
