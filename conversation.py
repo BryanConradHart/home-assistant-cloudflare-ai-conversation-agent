@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Literal
-
-import cloudflare
 
 from homeassistant.components import conversation
 from homeassistant.components.conversation import ChatLog, ConversationResult
@@ -17,7 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.intent import IntentResponse
 
-from .const import CONF_MODEL, DOMAIN
+from .const import CONF_API_TOKEN, CONF_MODEL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,28 +71,45 @@ class CloudflareAIConversationEntity(
         """Handle options update."""
         await hass.config_entries.async_reload(entry.entry_id)
 
+    def _format_history(self, chat_log: ChatLog) -> str:
+        """Format the conversation history for Cloudflare AI context."""
+
+        # Follows OpenAI/Anthropic/Ollama style: role: content\n\n
+        def format_message(msg):
+            role = getattr(msg, "role", "user")
+            content = getattr(msg, "content", "")
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                # If there are tool calls, include them
+                tool_str = "\n".join(
+                    f"[tool_call] {tool_call.tool_name}: {tool_call.tool_args}"
+                    for tool_call in msg.tool_calls
+                )
+                return f"{role}: {content}\n{tool_str}"
+            return f"{role}: {content}"
+
+        # Exclude system prompt if present (Cloudflare may not need it, but you can adjust)
+        history = [format_message(msg) for msg in chat_log.content]
+        return "\n\n".join(history)
+
     async def _async_handle_message(
         self,
         user_input: ConversationInput,
         chat_log: ChatLog,
     ) -> ConversationResult:
-        """Relay the user phrase to Cloudflare AI and return the completion."""
+        """Relay the user phrase to Cloudflare AI and return the completion, with history as context."""
         settings = {**self.entry.data, **self.entry.options}
         model = settings.get(CONF_MODEL, "@cf/meta/llama-3-8b-instruct")
-        prompt = user_input.text
-        account_id = settings.get("account_id")
-        if not account_id:
+        if not model:
             response = IntentResponse(language=user_input.language)
-            response.async_set_speech("Cloudflare account ID is not configured")
+            response.async_set_speech("Cloudflare model is not configured")
             return ConversationResult(
                 response=response,
                 conversation_id=chat_log.conversation_id,
                 continue_conversation=False,
             )
 
-        # Get the stored client from hass.data
-        cloudflare_client = self.hass.data[DOMAIN].get(self.entry.entry_id)
-        if cloudflare_client is None:
+        client = self.hass.data[DOMAIN].get(self.entry.entry_id)
+        if client is None:
             response = IntentResponse(language=user_input.language)
             response.async_set_speech("Cloudflare AI client is not configured")
             return ConversationResult(
@@ -104,21 +118,21 @@ class CloudflareAIConversationEntity(
                 continue_conversation=False,
             )
 
+        # Build the full prompt with history
+        prompt = self._format_history(chat_log)
+
         try:
-            # The cloudflare client is sync, so use run_in_executor for the call
-            ai_response = await cloudflare_client.ai.run(
-                model, prompt=prompt, account_id=account_id
+            completion = await client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                stream=False,
+                extra_headers={
+                    "cf-aig-authorization": f"Bearer {settings.get(CONF_API_TOKEN)}"
+                },
             )
-            if isinstance(ai_response, dict):
-                response_text = ai_response.get("response") or str(ai_response)
-            else:
-                response_text = str(ai_response)
-        except cloudflare.APIConnectionError:
-            response_text = "The server could not be reached"
-        except cloudflare.RateLimitError:
-            response_text = "A 429 status code was received; we should back off a bit."
-        except cloudflare.APIStatusError as e:
-            response_text = str(e.status_code) + ":" + str(e.response)
+            response_text = completion.choices[0].message.content
+        except Exception as e:
+            response_text = f"Error communicating with Cloudflare AI: {e}"
 
         response = IntentResponse(language=user_input.language)
         response.async_set_speech(response_text)
