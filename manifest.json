@@ -1,6 +1,6 @@
 {
   "domain": "home-assistant-cloudflare-ai-conversation-agent",
-  "name": "cloudflare ai conversation assistant",
+  "name": "Cloudflare AI Conversation Agent",
   "codeowners": [
     "@bryanconradhart"
   ],

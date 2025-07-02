@@ -6,12 +6,12 @@ import cloudflare
 import openai
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import CONF_API_TOKEN, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.httpx_client import get_async_client
 
-from .const import CONF_ACCOUNT_ID, CONF_API_TOKEN, CONF_GATEWAY_ID, CONF_MODEL, DOMAIN
+from .const import CONF_ACCOUNT_ID, CONF_GATEWAY_ID, CONF_MODEL, DOMAIN
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 _PLATFORMS: list[Platform] = [Platform.CONVERSATION]
@@ -19,11 +19,10 @@ _PLATFORMS: list[Platform] = [Platform.CONVERSATION]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the Cloudflare AI conversation agent."""
-    # Require all necessary fields before constructing the client
-    api_token = entry.data.get(CONF_API_TOKEN) or entry.options.get(CONF_API_TOKEN)
-    account_id = entry.data.get(CONF_ACCOUNT_ID) or entry.options.get(CONF_ACCOUNT_ID)
-    gateway_id = entry.data.get(CONF_GATEWAY_ID) or entry.options.get(CONF_GATEWAY_ID)
-    model = entry.data.get(CONF_MODEL) or entry.options.get(CONF_MODEL)
+    api_token = entry.data.get(CONF_API_TOKEN)
+    account_id = entry.data.get(CONF_ACCOUNT_ID)
+    gateway_id = entry.data.get(CONF_GATEWAY_ID)
+    model = entry.data.get(CONF_MODEL)
 
     if api_token and account_id and gateway_id and model:
         client = await hass.async_add_executor_job(

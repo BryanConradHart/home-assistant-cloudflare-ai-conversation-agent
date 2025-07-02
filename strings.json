@@ -8,8 +8,8 @@
       "rate_limit_exceeded": "Rate limit exceeded. Please try again later.",
       "unknown_api_error": "Unknown API error: code: {code}, message: {message}",
       "no_models": "Cannot find supported models. Please check that your API token has `Workers AI:Read` permissions.",
-      "no_accounts": "No accounts found. Please check that your API token has `Account:Read` permissions.",
-      "insufficient_permission_account": "Insufficient permission to access the requested resource. Please check that your API token has `Account:Read` permissions.",
+      "no_accounts": "No accounts found. Please check that your API token has `Account Settings:Read` permissions.",
+      "insufficient_permission_account": "Insufficient permission to access the requested resource. Please check that your API token is valid",
       "insufficient_permission_gateway_read": "Insufficient permission to access the requested resource. Please check that your API token has `AI Gateway:Read` or `AI Gateway:Write` permissions.",
       "insufficient_permission_gateway_write": "Insufficient permission to access the requested resource. Please check that your API token has `AI Gateway:Write` permissions.",
       "insufficient_permission_model": "Insufficient permission to access the requested resource. Please check that your API token has `Workers AI:Read` permissions.",
@@ -19,7 +19,7 @@
     "step": {
       "user": {
         "title": "Cloudflare API Token",
-        "description": "Enter your Cloudflare API token. This token must have permissions to list accounts, list AI models, and run AI completions. Recommended: Use a token with the `Account:Read`, `AI Gateway: Write`, `AI Gateway:Run`, and `Workers AI: Write` permissions for your account. Instructions for creating a token are at https://developers.cloudflare.com/fundamentals/api/get-started/create-token/. The token will be validated before you can continue.",
+        "description": "Enter your Cloudflare API token. See help doc for assistance in creating a token with the required permissions.",
         "data": {
           "api_token": "[%key:common::config_flow::data::api_token%]"
         }
@@ -32,24 +32,50 @@
         }
       },
       "gateway": {
-        "title": "Select AI Gateway",
-        "description": "Choose the Cloudflare Gateway to use for AI completions. This allows you to monitor and control your AI usage. For more information, visit https://developers.cloudflare.com/ai-gateway/",
+        "title": "Select or Create AI Gateway",
+        "description": "Choose the Cloudflare Gateway to use for AI completions. This allows you to monitor and control your AI usage.",
         "data": {
           "gateway_id": "Gateway"
         }
       },
       "new_gateway": {
         "title": "Create New AI Gateway",
-        "description": "Create a new Cloudflare AI Gateway to use for AI completions. Gateway should consist of alphanumeric characters and dashes. It must be unique within the account. For more information, visit https://developers.cloudflare.com/ai-gateway/",
+        "description": "Create a new Cloudflare AI Gateway to use for AI completions. Gateway should consist of alphanumeric characters and dashes. It must be unique within the account.",
         "data": {
           "gateway_id": "Gateway ID"
         }
       },
       "model": {
         "title": "Select Model",
-        "description": "Pick a model to use. See supported models at https://developers.cloudflare.com/workers-ai/models/ and model pricing at https://developers.cloudflare.com/workers-ai/platform/pricing/.",
+        "description": "Pick a model to use. Different models have different capabilities and costs. See help doc for more info.",
         "data": {
-          "model": "Model"
+          "model": "[%key:common::generic::model%]"
+        }
+      },
+      "advanced_options": {
+        "title": "Advanced Options",
+        "description": "Configure advanced LLM options. You can skip this step to use recommended defaults.",
+        "data": {
+          "llm_haas_api": {
+            "name": "[%key:common::config_flow::data::llm_hass_api%]",
+            "description": "The Home Assistant API to use for LLM integration."
+          },
+          "prompt": {
+            "name": "Instruction Prompt",
+            "description": "System prompt used to instruct the LLM how to act during the chat."
+          },
+          "max_tokens": {
+            "name": "Max Tokens",
+            "description": "Maximum number of tokens per request."
+          },
+          "top_p": {
+            "name": "Top-P",
+            "description": "Controls diversity via nucleus sampling."
+          },
+          "temperature": {
+            "name": "Temperature",
+            "description": "Controls randomness in LLM output."
+          }
         }
       }
     }

@@ -2,17 +2,49 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import cloudflare
 from cloudflare import AsyncCloudflare
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.const import CONF_API_TOKEN, CONF_LLM_HASS_API
+from homeassistant.helpers import llm
+from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 
-from .const import CONF_ACCOUNT_ID, CONF_API_TOKEN, CONF_GATEWAY_ID, CONF_MODEL, DOMAIN
+from .const import (
+    CONF_ACCOUNT_ID,
+    CONF_GATEWAY_ID,
+    CONF_MAX_TOKENS,
+    CONF_MODEL,
+    CONF_PROMPT,
+    CONF_TEMPERATURE,
+    CONF_TOP_P,
+    DOMAIN,
+)
 
 STEP_USER_DATA_SCHEMA = vol.Schema({vol.Required(CONF_API_TOKEN): str})
 
 STEP_ACCOUNT_DATA_SCHEMA = vol.Schema({vol.Required(CONF_ACCOUNT_ID): str})
+
+STEP_ADVANCED_OPTIONS_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CONF_LLM_HASS_API, default=llm.LLM_API_ASSIST): str,
+        vol.Optional(CONF_PROMPT, default=llm.DEFAULT_INSTRUCTIONS_PROMPT): str,
+        vol.Optional(CONF_MAX_TOKENS): int,
+        vol.Optional(CONF_TOP_P): float,
+        vol.Optional(CONF_TEMPERATURE): float,
+    }
+)
 
 
 class ConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -101,6 +133,7 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
             gateway_choices = {
                 g.id async for g in self.client.ai_gateway.list(account_id=account_id)
             }
+            gateway_choices = sorted(gateway_choices, key=lambda g: g.lower())
         except cloudflare.APIConnectionError:
             errors[CONF_GATEWAY_ID] = "cannot_connect"
         except cloudflare.RateLimitError:
@@ -179,14 +212,13 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         """Let the user pick a model from the Cloudflare API."""
         errors: dict[str, str] = {}
         description_placeholders: dict[str, str] = {}
-        api_token = self.context[CONF_API_TOKEN]
-        account_id = self.context[CONF_ACCOUNT_ID]
-        gateway_id = self.context.get(CONF_GATEWAY_ID)
+        model_choices: list[str] = []
+        default_model: str | None = None
         try:
             model_choices = {
                 m.get("name", m["id"])
                 async for m in self.client.ai.models.list(
-                    account_id=account_id, task="Text Generation"
+                    account_id=self.context[CONF_ACCOUNT_ID], task="Text Generation"
                 )
                 if "id" in m
             }
@@ -210,19 +242,73 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         if not model_choices:
             errors[CONF_MODEL] = "no_models"
         if user_input is not None and not errors:
-            return self.async_create_entry(
-                title="Cloudflare AI Conversation Agent",
-                data={
-                    CONF_API_TOKEN: api_token,
-                    CONF_ACCOUNT_ID: account_id,
-                    CONF_GATEWAY_ID: gateway_id,
-                    CONF_MODEL: user_input[CONF_MODEL],
-                },
-            )
+            self.context[CONF_MODEL] = user_input[CONF_MODEL]
+            return await self.async_step_advanced_options()
         return self.async_show_form(
             step_id="model",
             data_schema=vol.Schema(
                 {vol.Required(CONF_MODEL, default=default_model): vol.In(model_choices)}
             ),
             errors=errors,
+        )
+
+    async def async_step_advanced_options(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Show or handle advanced options for LLM API, prompt, max tokens, top-p, temperature."""
+        errors: dict[str, str] = {}
+        llm_api_options = [
+            SelectOptionDict(value=api.id, label=api.name)
+            for api in llm.async_get_apis(self.hass)
+        ]
+        step_schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_LLM_HASS_API, default=llm.LLM_API_ASSIST
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=llm_api_options, mode=SelectSelectorMode.DROPDOWN
+                    )
+                ),
+                vol.Optional(
+                    CONF_PROMPT, default=llm.DEFAULT_INSTRUCTIONS_PROMPT
+                ): TextSelector(
+                    TextSelectorConfig(multiline=True, type=TextSelectorType.TEXT)
+                ),
+                vol.Optional(CONF_MAX_TOKENS): int,
+                vol.Optional(CONF_TOP_P): float,
+                vol.Optional(CONF_TEMPERATURE): float,
+            }
+        )
+        if user_input is not None:
+            # If user skips, set defaults
+            if user_input == {}:
+                options = {
+                    CONF_LLM_HASS_API: llm.LLM_API_ASSIST,
+                    CONF_PROMPT: llm.DEFAULT_INSTRUCTIONS_PROMPT,
+                }
+            else:
+                options = user_input
+            return self.async_create_entry(
+                title="Cloudflare " + self.context[CONF_MODEL],
+                data={
+                    CONF_API_TOKEN: self.context[CONF_API_TOKEN],
+                    CONF_ACCOUNT_ID: self.context[CONF_ACCOUNT_ID],
+                    CONF_GATEWAY_ID: self.context.get(CONF_GATEWAY_ID),
+                    CONF_MODEL: self.context[CONF_MODEL],
+                },
+                options=options,
+            )
+        return self.async_show_form(
+            step_id="advanced_options",
+            data_schema=step_schema,
+            errors=errors,
+            description_placeholders={
+                "section": "Advanced Options",
+                "llm_haas_api": "LLM Home Assistant API",
+                "prompt": "Instruction Prompt",
+                "max_tokens": "Max Tokens",
+                "top_p": "Top-P",
+                "temperature": "Temperature",
+            },
         )

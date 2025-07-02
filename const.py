@@ -2,8 +2,9 @@
 
 DOMAIN = "home-assistant-cloudflare-ai-conversation-agent"
 CONF_PROMPT = "prompt"
-CONF_API_TOKEN = "api_token"
 CONF_MODEL = "model"
 CONF_ACCOUNT_ID = "account_id"
 CONF_GATEWAY_ID = "gateway_id"
-CONF_PROMPT = "prompt"
+CONF_TOP_P = "top_p"
+CONF_TEMPERATURE = "temperature"
+CONF_MAX_TOKENS = "max_tokens"
