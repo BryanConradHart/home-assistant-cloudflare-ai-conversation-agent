@@ -8,14 +8,21 @@ import cloudflare
 from cloudflare import AsyncCloudflare
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_API_TOKEN, CONF_LLM_HASS_API
+from homeassistant.core import callback
 from homeassistant.helpers import llm
 from homeassistant.helpers.selector import (
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
+    TemplateSelector,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -243,52 +250,6 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
             errors[CONF_MODEL] = "no_models"
         if user_input is not None and not errors:
             self.context[CONF_MODEL] = user_input[CONF_MODEL]
-            return await self.async_step_advanced_options()
-        return self.async_show_form(
-            step_id="model",
-            data_schema=vol.Schema(
-                {vol.Required(CONF_MODEL, default=default_model): vol.In(model_choices)}
-            ),
-            errors=errors,
-        )
-
-    async def async_step_advanced_options(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Show or handle advanced options for LLM API, prompt, max tokens, top-p, temperature."""
-        errors: dict[str, str] = {}
-        llm_api_options = [
-            SelectOptionDict(value=api.id, label=api.name)
-            for api in llm.async_get_apis(self.hass)
-        ]
-        step_schema = vol.Schema(
-            {
-                vol.Optional(
-                    CONF_LLM_HASS_API, default=llm.LLM_API_ASSIST
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=llm_api_options, mode=SelectSelectorMode.DROPDOWN
-                    )
-                ),
-                vol.Optional(
-                    CONF_PROMPT, default=llm.DEFAULT_INSTRUCTIONS_PROMPT
-                ): TextSelector(
-                    TextSelectorConfig(multiline=True, type=TextSelectorType.TEXT)
-                ),
-                vol.Optional(CONF_MAX_TOKENS): int,
-                vol.Optional(CONF_TOP_P): float,
-                vol.Optional(CONF_TEMPERATURE): float,
-            }
-        )
-        if user_input is not None:
-            # If user skips, set defaults
-            if user_input == {}:
-                options = {
-                    CONF_LLM_HASS_API: llm.LLM_API_ASSIST,
-                    CONF_PROMPT: llm.DEFAULT_INSTRUCTIONS_PROMPT,
-                }
-            else:
-                options = user_input
             return self.async_create_entry(
                 title="Cloudflare " + self.context[CONF_MODEL],
                 data={
@@ -297,16 +258,83 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_GATEWAY_ID: self.context.get(CONF_GATEWAY_ID),
                     CONF_MODEL: self.context[CONF_MODEL],
                 },
-                options=options,
+                options={
+                    CONF_LLM_HASS_API: llm.LLM_API_ASSIST,
+                    CONF_PROMPT: llm.DEFAULT_INSTRUCTIONS_PROMPT,
+                },
             )
         return self.async_show_form(
-            step_id="advanced_options",
-            data_schema=step_schema,
+            step_id="model",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_MODEL, default=default_model): vol.In(model_choices)}
+            ),
+            errors=errors,
+        )
+
+    @staticmethod
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Return the options flow handler for this integration."""
+        return CloudflareAIOptionsFlowHandler(config_entry)
+
+
+class CloudflareAIOptionsFlowHandler(OptionsFlow):
+    """Handle options flow for Cloudflare AI Conversation Assistant."""
+
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        """Initialize the options flow handler."""
+        self.config_entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Show the options form for updating configuration."""
+        errors: dict[str, str] = {}
+        llm_api_options = [
+            SelectOptionDict(value=api.id, label=api.name)
+            for api in llm.async_get_apis(self.hass)
+        ]
+        options_schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_PROMPT,
+                    default=self.config_entry.options.get(
+                        CONF_PROMPT, llm.DEFAULT_INSTRUCTIONS_PROMPT
+                    ),
+                ): TemplateSelector(),
+                vol.Required(
+                    CONF_LLM_HASS_API,
+                    default=self.config_entry.options.get(
+                        CONF_LLM_HASS_API, llm.LLM_API_ASSIST
+                    ),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=llm_api_options,
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(
+                    CONF_MAX_TOKENS,
+                    default=self.config_entry.options.get(CONF_MAX_TOKENS),
+                ): int,
+                vol.Optional(
+                    CONF_TOP_P,
+                    default=self.config_entry.options.get(CONF_TOP_P),
+                ): float,
+                vol.Optional(
+                    CONF_TEMPERATURE,
+                    default=self.config_entry.options.get(CONF_TEMPERATURE),
+                ): float,
+            }
+        )
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=options_schema,
             errors=errors,
             description_placeholders={
-                "section": "Advanced Options",
-                "llm_haas_api": "LLM Home Assistant API",
                 "prompt": "Instruction Prompt",
+                "llm_haas_api": "LLM Home Assistant API",
                 "max_tokens": "Max Tokens",
                 "top_p": "Top-P",
                 "temperature": "Temperature",

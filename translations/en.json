@@ -50,31 +50,27 @@
                 "data": {
                     "model": "Model"
                 }
-            },
-            "advanced_options": {
-                "title": "Advanced Options",
-                "description": "Configure advanced LLM options. You can skip this step to use recommended defaults.",
+            }
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Cloudflare AI Conversation Agent Options",
+                "description": "Configure the behavior of the Cloudflare AI Conversation Agent.",
                 "data": {
-                    "llm_haas_api": {
-                        "name": "LLM Home Assistant API",
-                        "description": "The Home Assistant API to use for LLM integration."
-                    },
-                    "prompt": {
-                        "name": "Instruction Prompt",
-                        "description": "System prompt used to instruct the LLM how to act during the chat."
-                    },
-                    "max_tokens": {
-                        "name": "Max Tokens",
-                        "description": "Maximum number of tokens per request."
-                    },
-                    "top_p": {
-                        "name": "Top-P",
-                        "description": "Controls diversity via nucleus sampling."
-                    },
-                    "temperature": {
-                        "name": "Temperature",
-                        "description": "Controls randomness in LLM output."
-                    }
+                    "prompt": "Instruction Prompt",
+                    "llm_hass_api": "LLM Home Assistant API",
+                    "max_tokens": "Advanced: Max Tokens",
+                    "top_p": "Advanced: Top-P",
+                    "temperature": "Advanced: Temperature"
+                },
+                "data_description": {
+                    "prompt": "Instruct how the LLM should respond. This can be a template.",
+                    "llm_hass_api": "The Home Assistant API to use for LLM integration. This is typically the default build-in `Assist`.",
+                    "max_tokens": "Maximum number of tokens per request. Leave blank for default.",
+                    "top_p": "Controls diversity via nucleus sampling. Leave blank for default.",
+                    "temperature": "Controls randomness in LLM output. Leave blank for default."
                 }
             }
         }
