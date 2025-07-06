@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncIterable, Callable
 import json
 import logging
 from typing import Any, Literal
 
-from openai.types.chat.chat_completion import ChatCompletion, Choice
+from openai import AsyncOpenAI, Stream
 from openai.types.chat.chat_completion_assistant_message_param import (
     ChatCompletionAssistantMessageParam,
 )
+from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
 from openai.types.chat.chat_completion_message_tool_call_param import (
     ChatCompletionMessageToolCallParam,
@@ -33,6 +34,8 @@ from homeassistant.components import conversation
 from homeassistant.components.conversation import ChatLog, ConversationResult
 from homeassistant.components.conversation.chat_log import (
     AssistantContent,
+    AssistantContentDeltaDict,
+    Content,
     SystemContent,
     ToolResultContent,
     UserContent,
@@ -41,6 +44,7 @@ from homeassistant.components.conversation.models import ConversationInput
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_TOKEN, CONF_LLM_HASS_API, MATCH_ALL
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import llm
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.intent import IntentResponse
@@ -55,6 +59,8 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+_MAX_TOOL_ITERATIONS = 10
 
 
 async def async_setup_entry(
@@ -73,7 +79,7 @@ class CloudflareAIConversationEntity(
     """Cloudflare AI conversation agent using the Cloudflare python client."""
 
     _attr_has_entity_name = True
-    _attr_supports_streaming = False
+    _attr_supports_streaming = True
 
     def __init__(self, entry: ConfigEntry) -> None:
         """Initialize the agent with the desired config."""
@@ -126,7 +132,7 @@ class CloudflareAIConversationEntity(
         return self._entry.data.get(CONF_MODEL)
 
     @property
-    def client(self) -> ChatCompletion | None:
+    def client(self) -> AsyncOpenAI | None:
         """Return the OpenAI client for this config entry."""
         return self.hass.data[DOMAIN].get(self._entry.entry_id)
 
@@ -196,32 +202,6 @@ class CloudflareAIConversationEntity(
         chat_log: ChatLog,
     ) -> ConversationResult:
         """Relay the user phrase to Cloudflare AI and return the completion, with history as context. Supports function calling."""
-        if not self.api_token:
-            response = IntentResponse(language=user_input.language)
-            response.async_set_speech("Cloudflare API token is not configured")
-            return ConversationResult(
-                response=response,
-                conversation_id=chat_log.conversation_id,
-                continue_conversation=False,
-            )
-
-        if not self.model:
-            response = IntentResponse(language=user_input.language)
-            response.async_set_speech("Cloudflare model is not configured")
-            return ConversationResult(
-                response=response,
-                conversation_id=chat_log.conversation_id,
-                continue_conversation=False,
-            )
-
-        if self.client is None:
-            response = IntentResponse(language=user_input.language)
-            response.async_set_speech("Cloudflare AI client is not configured")
-            return ConversationResult(
-                response=response,
-                conversation_id=chat_log.conversation_id,
-                continue_conversation=False,
-            )
         try:
             await chat_log.async_update_llm_data(
                 DOMAIN,
@@ -232,33 +212,6 @@ class CloudflareAIConversationEntity(
         except conversation.ConverseError as err:
             return err.as_conversation_result()
 
-        # Build the full chat history as a list of OpenAI messages
-        messages: ChatCompletionMessageParam = [
-            ChatCompletionSystemMessageParam(content=chat.content, role="system")
-            if isinstance(chat, SystemContent)
-            else ChatCompletionAssistantMessageParam(
-                content=chat.content,
-                role="assistant",
-                tool_calls=[
-                    self._format_tool_call_param(tool) for tool in chat.tool_calls
-                ]
-                if chat.tool_calls
-                else None,
-            )
-            if isinstance(chat, AssistantContent)
-            else ChatCompletionToolMessageParam(
-                content=chat.content, role="tool", tool_call_id=chat.tool_call_id
-            )
-            if isinstance(chat, ToolResultContent)
-            else ChatCompletionUserMessageParam(content=chat.content, role="user")
-            if isinstance(chat, UserContent)
-            else None
-            for chat in chat_log.content
-            if isinstance(
-                chat, (SystemContent, UserContent, AssistantContent, ToolResultContent)
-            )
-        ]
-
         # Function calling support
         tools: list[ChatCompletionToolParam] | None = None
         if chat_log.llm_api:
@@ -267,64 +220,118 @@ class CloudflareAIConversationEntity(
                 for tool in chat_log.llm_api.tools
             ]
 
-        # Only include top_p, temperature, max_tokens if not None
-        create_kwargs = {
-            "model": self.model,
-            "messages": messages,
-            "stream": False,
-            "tools": tools,
-            "tool_choice": "auto",
-            "extra_headers": {"cf-aig-authorization": f"Bearer {self.api_token}"},
-        }
-        if self.top_p is not None:
-            create_kwargs["top_p"] = self.top_p
-        if self.temperature is not None:
-            create_kwargs["temperature"] = self.temperature
-        if self.max_tokens is not None:
-            create_kwargs["max_tokens"] = self.max_tokens
+        # Build the full chat history as a list of OpenAI messages
+        messages: ChatCompletionMessageParam = [
+            self._convert_content(chat) for chat in chat_log.content
+        ]
 
-        try:
-            # extra headers required for Cloudflare AI Gateway
-            completion: ChatCompletion = await self.client.chat.completions.create(
-                **create_kwargs
-            )
+        for _iteration in range(_MAX_TOOL_ITERATIONS):
+            # Only include top_p, temperature, max_tokens if not None
+            create_kwargs = {
+                "model": self.model,
+                "messages": messages,
+                "stream": True,
+                "tools": tools,
+                "tool_choice": "auto",
+                "extra_headers": {
+                    "cf-aig-authorization": f"Bearer {self.api_token}"
+                },  # extra headers required for Cloudflare AI Gateway
+            }
+            if self.top_p is not None:
+                create_kwargs["top_p"] = self.top_p
+            if self.temperature is not None:
+                create_kwargs["temperature"] = self.temperature
+            if self.max_tokens is not None:
+                create_kwargs["max_tokens"] = self.max_tokens
+            try:
+                result: Stream[
+                    ChatCompletionChunk
+                ] = await self.client.chat.completions.create(**create_kwargs)
+            except Exception as e:
+                raise HomeAssistantError("Error talking to Cloudflare") from e
+
             # Handle function call responses if present
-            choice: Choice = completion.choices[0]
-            if choice.message and choice.message.tool_calls:
-                # Add function call as tool call to chat log
-                chat_log.async_add_assistant_content(
-                    AssistantContent(
-                        content=None,
-                        agent_id=user_input.agent_id,
-                        tool_calls=[
-                            llm.ToolInput(
-                                id=tool_call.id,
-                                tool_name=tool_call.function.name,
-                                tool_args=json.loads(tool_call.function.arguments),
-                            )
-                            for tool_call in choice.message.tool_calls
-                            if tool_call.id
-                            and tool_call.type == "function"
-                            and tool_call.function
-                        ],
+            messages.extend(
+                [
+                    self._convert_content(content)
+                    async for content in chat_log.async_add_delta_content_stream(
+                        user_input.agent_id,
+                        self._transform_stream(result, user_input),
                     )
-                )
-                response_text = choice.message.tool_calls[0].function.name
-            else:
-                response_text = choice.message.content
-                chat_log.async_add_assistant_content_without_tools(
-                    AssistantContent(
-                        content=response_text,
-                        agent_id=user_input.agent_id,
-                    )
-                )
-        except Exception as e:
-            response_text = f"Error communicating with Cloudflare AI: {e}"
+                ]
+            )
 
-        response = IntentResponse(language=user_input.language)
-        response.async_set_speech(response_text)
-        return ConversationResult(
-            response=response,
+            if not chat_log.unresponded_tool_results:
+                break
+
+        intent_response = IntentResponse(language=user_input.language)
+        intent_response.async_set_speech(chat_log.content[-1].content or "")
+        return conversation.ConversationResult(
+            response=intent_response,
             conversation_id=chat_log.conversation_id,
-            continue_conversation=False,
+            continue_conversation=chat_log.continue_conversation,
         )
+
+    def _convert_content(self, chat: Content) -> ChatCompletionMessageParam:
+        """Convert a Home Assistant conversation content object to an OpenAI message param using pattern matching."""
+        match chat:
+            case SystemContent(role="system", content=content):
+                return ChatCompletionSystemMessageParam(content=content, role="system")
+            case AssistantContent(
+                role="assistant", content=content, tool_calls=tool_calls
+            ):
+                return ChatCompletionAssistantMessageParam(
+                    content=content,
+                    role="assistant",
+                    tool_calls=[
+                        self._format_tool_call_param(tool) for tool in tool_calls
+                    ]
+                    if tool_calls
+                    else None,
+                )
+            case ToolResultContent(
+                role="tool_result", content=content, tool_call_id=tool_call_id
+            ):
+                return ChatCompletionToolMessageParam(
+                    content=content, role="tool", tool_call_id=tool_call_id
+                )
+            case UserContent(role="user", content=content):
+                return ChatCompletionUserMessageParam(content=content, role="user")
+            case _:
+                raise TypeError(f"Unknown Content type: {type(chat).__name__}")
+
+    async def _transform_stream(
+        self,
+        result: Stream[ChatCompletionChunk],
+        user_input: ConversationInput,
+    ) -> AsyncIterable[AssistantContentDeltaDict]:
+        new_msg = True
+        async for chunk in result:
+            for choice in chunk.choices:
+                if choice.delta.refusal:
+                    raise HomeAssistantError("Request refused: " + choice.delta.refusal)
+                delta: AssistantContentDeltaDict = {}
+                if new_msg:
+                    delta["role"] = "assistant"
+                    new_msg = False
+                if (content := choice.delta.content) and isinstance(content, str):
+                    delta["content"] = content
+                if tool_calls := choice.delta.tool_calls:
+                    delta["tool_calls"] = [
+                        llm.ToolInput(
+                            id=tool_call.id,
+                            tool_name=tool_call.function.name,
+                            tool_args=json.loads(tool_call.function.arguments),
+                        )
+                        for tool_call in tool_calls
+                        if tool_call.id
+                        and tool_call.type == "function"
+                        and tool_call.function
+                    ]
+                if choice.finish_reason:
+                    new_msg = True
+                    if choice.finish_reason not in {"stop", "tool_calls"}:
+                        raise HomeAssistantError(
+                            f"Unexpected finish reason: {choice.finish_reason}"
+                        )
+                yield delta

@@ -17,9 +17,10 @@ Create a [Home Assistant Conversation Agent](https://www.home-assistant.io/voice
 
 1. Create a Cloudflare [API Token](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/) for secure API access.
    - **Required permissions:**
-     - `Account Settings:Read` — to list the available accounts
+     - `Account Settings:Read` — to list the available accounts (Optional: If you're using a User Token instead of an Account Token)
      - `Workers AI:Read` — to list the available LLM models, during setup
-     - `AI Gateway:Edit` — to create a new AI gateway during setup (optional, if you already have one)
+     - `AI Gateway:Edit` — to create a new AI gateway during setup (optional: if you already have one)
+     - `AI Gateway:Read` — to get the list of existing gateways, and get the gateway ID
      - `AI Gateway:Run` — use the AI, to get completions.
 2. Configure the integration in Home Assistant, providing your token and selecting your desired [Cloudflare AI model](https://developers.cloudflare.com/workers-ai/models/).
 3. Optionally, adjust advanced options such as prompt, temperature, top-p, and max tokens. [See usage rates for your chosen model](https://developers.cloudflare.com/workers-ai/platform/usage/).

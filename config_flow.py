@@ -15,7 +15,6 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.const import CONF_API_TOKEN, CONF_LLM_HASS_API
-from homeassistant.core import callback
 from homeassistant.helpers import llm
 from homeassistant.helpers.selector import (
     SelectOptionDict,
@@ -23,9 +22,6 @@ from homeassistant.helpers.selector import (
     SelectSelectorConfig,
     SelectSelectorMode,
     TemplateSelector,
-    TextSelector,
-    TextSelectorConfig,
-    TextSelectorType,
 )
 
 from .const import (
@@ -38,6 +34,9 @@ from .const import (
     CONF_TOP_P,
     DOMAIN,
 )
+
+# Constant for the default Cloudflare gateway name
+HA_CLOUDFLARE_GATEWAY_NAME = "ha-cloudflare-conversation-agent"
 
 STEP_USER_DATA_SCHEMA = vol.Schema({vol.Required(CONF_API_TOKEN): str})
 
@@ -140,7 +139,6 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
             gateway_choices = {
                 g.id async for g in self.client.ai_gateway.list(account_id=account_id)
             }
-            gateway_choices = sorted(gateway_choices, key=lambda g: g.lower())
         except cloudflare.APIConnectionError:
             errors[CONF_GATEWAY_ID] = "cannot_connect"
         except cloudflare.RateLimitError:
@@ -151,9 +149,10 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
             errors[CONF_GATEWAY_ID] = "unknown_api_error"
             description_placeholders["code"] = e.status_code
             description_placeholders["message"] = e.response
-        # Add 'Create new gateway' option at the top
+        # Add 'Create new gateway' option at the top, then sort gateways alphabetically
         CREATE_NEW = "Create new gateway..."
-        gateway_choices = {CREATE_NEW, *gateway_choices}
+        gateway_choices = [CREATE_NEW, *sorted(gateway_choices, key=str.lower)]
+        # Set default to HA_CLOUDFLARE_GATEWAY_NAME if it exists, else None
         if user_input is not None and not errors:
             if user_input[CONF_GATEWAY_ID] == CREATE_NEW:
                 return await self.async_step_new_gateway()
@@ -162,7 +161,11 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="gateway",
             data_schema=vol.Schema(
-                {vol.Required(CONF_GATEWAY_ID): vol.In(gateway_choices)}
+                {
+                    vol.Required(
+                        CONF_GATEWAY_ID, default=HA_CLOUDFLARE_GATEWAY_NAME
+                    ): vol.In(gateway_choices)
+                }
             ),
             errors=errors,
         )
@@ -204,11 +207,7 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="new_gateway",
             data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_GATEWAY_ID, default="ha-cloudflare-conversation-agent"
-                    ): str
-                }
+                {vol.Required(CONF_GATEWAY_ID, default=HA_CLOUDFLARE_GATEWAY_NAME): str}
             ),
             errors=errors,
         )
@@ -220,22 +219,15 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         description_placeholders: dict[str, str] = {}
         model_choices: list[str] = []
-        default_model: str | None = None
         try:
-            model_choices = {
-                m.get("name", m["id"])
+            model_choices = [
+                SelectOptionDict(value=m.get("name"), label=m.get("name"))
                 async for m in self.client.ai.models.list(
                     account_id=self.context[CONF_ACCOUNT_ID], task="Text Generation"
                 )
-                if "id" in m
-            }
-            model_choices = sorted(model_choices, key=lambda m: m.lower())
-            # Set default model if available
-            default_model = (
-                "@cf/meta/llama-3.1-8b-instruct-fp8"
-                if "@cf/meta/llama-3.1-8b-instruct-fp8" in model_choices
-                else None
-            )
+                if "id" in m and self.supports_function_calling(m)
+            ]
+            model_choices = sorted(model_choices, key=lambda m: m["label"].lower())
         except cloudflare.APIConnectionError:
             errors[CONF_MODEL] = "cannot_connect"
         except cloudflare.RateLimitError:
@@ -251,7 +243,7 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None and not errors:
             self.context[CONF_MODEL] = user_input[CONF_MODEL]
             return self.async_create_entry(
-                title="Cloudflare " + self.context[CONF_MODEL],
+                title=f"Cloudflare {self.context[CONF_MODEL]}",
                 data={
                     CONF_API_TOKEN: self.context[CONF_API_TOKEN],
                     CONF_ACCOUNT_ID: self.context[CONF_ACCOUNT_ID],
@@ -266,10 +258,29 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="model",
             data_schema=vol.Schema(
-                {vol.Required(CONF_MODEL, default=default_model): vol.In(model_choices)}
+                {
+                    vol.Required(
+                        CONF_MODEL, default="@cf/meta/llama-4-scout-17b-16e-instruct"
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=model_choices,
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
             ),
             errors=errors,
         )
+
+    def supports_function_calling(self, model: dict) -> bool:
+        """Return True if the model supports function calling."""
+        for prop in model.get("properties", []):
+            if (
+                prop.get("property_id") == "function_calling"
+                and prop.get("value") == "true"
+            ):
+                return True
+        return False
 
     @staticmethod
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
@@ -309,7 +320,7 @@ class CloudflareAIOptionsFlowHandler(OptionsFlow):
                 ): SelectSelector(
                     SelectSelectorConfig(
                         options=llm_api_options,
-                        mode=SelectSelectorMode.DROPDOWN,
+                        multiple=True,
                     )
                 ),
                 vol.Optional(
