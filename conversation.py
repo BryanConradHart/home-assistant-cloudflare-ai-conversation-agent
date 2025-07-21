@@ -11,7 +11,7 @@ from openai import AsyncOpenAI, Stream
 from openai.types.chat.chat_completion_assistant_message_param import (
     ChatCompletionAssistantMessageParam,
 )
-from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
+from openai.types.chat.chat_completion_chunk import ChatCompletionChunk, Choice
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
 from openai.types.chat.chat_completion_message_tool_call_param import (
     ChatCompletionMessageToolCallParam,
@@ -191,10 +191,12 @@ class CloudflareAIConversationEntity(
     ) -> ChatCompletionMessageToolCallParam:
         """Format tool call specification."""
         tool_spec = ToolParamFunction(
-            name=tool.name,
-            parameters=json.dumps(tool.parameters),
+            name=tool.tool_name,
+            parameters=json.dumps(tool.tool_args),
         )
-        return ChatCompletionMessageToolCallParam(function=tool_spec, type="function")
+        return ChatCompletionMessageToolCallParam(
+            id=tool.id, function=tool_spec, type="function"
+        )
 
     async def _async_handle_message(
         self,
@@ -265,7 +267,7 @@ class CloudflareAIConversationEntity(
                 break
 
         intent_response = IntentResponse(language=user_input.language)
-        intent_response.async_set_speech(chat_log.content[-1].content or "")
+        intent_response.async_set_speech(getattr(chat_log.content[-1], "content", ""))
         return conversation.ConversationResult(
             response=intent_response,
             conversation_id=chat_log.conversation_id,
@@ -276,12 +278,15 @@ class CloudflareAIConversationEntity(
         """Convert a Home Assistant conversation content object to an OpenAI message param using pattern matching."""
         match chat:
             case SystemContent(role="system", content=content):
-                return ChatCompletionSystemMessageParam(content=content, role="system")
+                return ChatCompletionSystemMessageParam(
+                    content=content, role="developer"
+                )
             case AssistantContent(
                 role="assistant", content=content, tool_calls=tool_calls
             ):
                 return ChatCompletionAssistantMessageParam(
-                    content=content,
+                    content=content
+                    or "",  # should be allowed to be null, but cloudflare seems to do extra erroneous validation
                     role="assistant",
                     tool_calls=[
                         self._format_tool_call_param(tool) for tool in tool_calls
@@ -290,48 +295,82 @@ class CloudflareAIConversationEntity(
                     else None,
                 )
             case ToolResultContent(
-                role="tool_result", content=content, tool_call_id=tool_call_id
+                role="tool_result", tool_result=tool_result, tool_call_id=tool_call_id
             ):
                 return ChatCompletionToolMessageParam(
-                    content=content, role="tool", tool_call_id=tool_call_id
+                    content=json.dumps(tool_result),
+                    role="tool",
+                    tool_call_id=tool_call_id,
                 )
             case UserContent(role="user", content=content):
                 return ChatCompletionUserMessageParam(content=content, role="user")
             case _:
-                raise TypeError(f"Unknown Content type: {type(chat).__name__}")
+                raise TypeError(
+                    f"Unknown Content type: {type(chat).__module__}.{type(chat).__qualname__}"
+                )
 
     async def _transform_stream(
         self,
         result: Stream[ChatCompletionChunk],
         user_input: ConversationInput,
     ) -> AsyncIterable[AssistantContentDeltaDict]:
-        new_msg = True
+        new_msg: bool = True
         async for chunk in result:
-            for choice in chunk.choices:
-                if choice.delta.refusal:
-                    raise HomeAssistantError("Request refused: " + choice.delta.refusal)
-                delta: AssistantContentDeltaDict = {}
-                if new_msg:
-                    delta["role"] = "assistant"
-                    new_msg = False
-                if (content := choice.delta.content) and isinstance(content, str):
-                    delta["content"] = content
-                if tool_calls := choice.delta.tool_calls:
+            if len(chunk.choices) != 1:
+                raise HomeAssistantError(
+                    f"AI produced an unexpected number of choices: {len(chunk.choices)}"
+                )
+            choice: Choice = chunk.choices[0]
+            if choice.delta.refusal:
+                raise HomeAssistantError("Request refused: " + choice.delta.refusal)
+            delta: AssistantContentDeltaDict = {}
+            if new_msg:
+                delta["role"] = "assistant"
+                current_tool_calls = []
+                new_msg = False
+            if (content := choice.delta.content) and isinstance(content, str):
+                delta["content"] = content
+            if tool_calls := choice.delta.tool_calls:
+                for tool_call in tool_calls:
+                    # Grow the list if needed
+                    if tool_call.index >= len(current_tool_calls):
+                        current_tool_calls.extend(
+                            [{}] * (tool_call.index - len(current_tool_calls) + 1)
+                        )
+                    # Only populate if empty
+                    if not current_tool_calls[tool_call.index]:
+                        current_tool_calls[tool_call.index] = {
+                            "id": "",
+                            "name": "",
+                            "arguments": "",
+                        }
+                    # tool calls are build in parts, but HA doesn't support partial tool calls
+                    if tool_call.id:
+                        current_tool_calls[tool_call.index]["id"] += tool_call.id
+                    if tool_call.function.name:
+                        current_tool_calls[tool_call.index]["name"] += (
+                            tool_call.function.name
+                        )
+                    if tool_call.function.arguments:
+                        current_tool_calls[tool_call.index]["arguments"] += (
+                            tool_call.function.arguments
+                        )
+            if choice.finish_reason:
+                new_msg = True
+                if current_tool_calls:
+                    # If there are tool calls, add them to the delta
                     delta["tool_calls"] = [
                         llm.ToolInput(
-                            id=tool_call.id,
-                            tool_name=tool_call.function.name,
-                            tool_args=json.loads(tool_call.function.arguments),
+                            id=tool_call["id"],
+                            tool_name=tool_call["name"],
+                            tool_args=json.loads(tool_call["arguments"]),
                         )
-                        for tool_call in tool_calls
-                        if tool_call.id
-                        and tool_call.type == "function"
-                        and tool_call.function
+                        for tool_call in current_tool_calls
                     ]
-                if choice.finish_reason:
-                    new_msg = True
-                    if choice.finish_reason not in {"stop", "tool_calls"}:
-                        raise HomeAssistantError(
-                            f"Unexpected finish reason: {choice.finish_reason}"
-                        )
+                if choice.finish_reason not in {"stop", "tool_calls"}:
+                    raise HomeAssistantError(
+                        f"Unexpected finish reason: {choice.finish_reason}"
+                    )
+            if any(key in delta for key in ("role", "content", "tool_calls")):
+                # Only yield if there is content to yield
                 yield delta
