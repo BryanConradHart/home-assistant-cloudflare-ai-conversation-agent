@@ -266,9 +266,7 @@ class CloudflareAIConversationEntity(
         """Convert a Home Assistant conversation content object to an OpenAI message param using pattern matching."""
         match chat:
             case SystemContent(role="system", content=content):
-                return ChatCompletionSystemMessageParam(
-                    content=content, role="developer"
-                )
+                return ChatCompletionSystemMessageParam(content=content, role="system")
             case AssistantContent(
                 role="assistant", content=content, tool_calls=tool_calls
             ):
