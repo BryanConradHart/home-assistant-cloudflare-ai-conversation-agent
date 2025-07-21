@@ -155,26 +155,6 @@ class CloudflareAIConversationEntity(
         """Handle options update."""
         await hass.config_entries.async_reload(entry.entry_id)
 
-    def _format_history(self, chat_log: ChatLog) -> str:
-        """Format the conversation history for Cloudflare AI context."""
-
-        # Follows OpenAI/Anthropic/Ollama style: role: content\n\n
-        def format_message(msg):
-            role = getattr(msg, "role", "user")
-            content = getattr(msg, "content", "")
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                # If there are tool calls, include them
-                tool_str = "\n".join(
-                    f"[tool_call] {tool_call.tool_name}: {tool_call.tool_args}"
-                    for tool_call in msg.tool_calls
-                )
-                return f"{role}: {content}\n{tool_str}"
-            return f"{role}: {content}"
-
-        # Exclude system prompt if present (Cloudflare may not need it, but you can adjust)
-        history = [format_message(msg) for msg in chat_log.content]
-        return "\n\n".join(history)
-
     def _format_tool(
         self, tool: llm.Tool, custom_serializer: Callable[[Any], Any] | None
     ) -> ChatCompletionToolParam:
@@ -192,7 +172,7 @@ class CloudflareAIConversationEntity(
         """Format tool call specification."""
         tool_spec = ToolParamFunction(
             name=tool.tool_name,
-            parameters=json.dumps(tool.tool_args),
+            arguments=json.dumps(tool.tool_args),
         )
         return ChatCompletionMessageToolCallParam(
             id=tool.id, function=tool_spec, type="function"
@@ -266,8 +246,16 @@ class CloudflareAIConversationEntity(
             if not chat_log.unresponded_tool_results:
                 break
 
+        if chat_log.unresponded_tool_results:
+            raise HomeAssistantError("Exceeded maxmimum tool uses for a single request")
+        if (
+            hasattr(chat_log.content[-1], "content")
+            and not chat_log.content[-1].content
+        ):
+            raise HomeAssistantError("Assistant did not respond with text content")
+        # If there are no unresponded tool results, we can return the response
         intent_response = IntentResponse(language=user_input.language)
-        intent_response.async_set_speech(getattr(chat_log.content[-1], "content", ""))
+        intent_response.async_set_speech(chat_log.content[-1].content)
         return conversation.ConversationResult(
             response=intent_response,
             conversation_id=chat_log.conversation_id,
