@@ -1,19 +1,12 @@
 {
     "title": "Cloudflare AI Conversation Agent",
     "config": {
+        "flow_title": "{name}",
         "error": {
-            "cannot_connect": "Failed to connect",
-            "invalid_auth": "Invalid authentication",
-            "rate_limit_exceeded": "Rate limit exceeded. Please try again later.",
-            "unknown_api_error": "Unknown API error: code: {code}, message: {message}",
-            "no_models": "Cannot find supported models. Please check that your API token has `Workers AI:Read` permissions.",
-            "no_accounts": "No accounts found. Please check that your API token has `Account Settings:Read` permissions.",
-            "insufficient_permission_account": "Insufficient permission to access the requested resource. Please check that your API token is valid.",
-            "insufficient_permission_gateway_read": "Insufficient permission to access the requested resource. Please check that your API token has `AI Gateway:Read` or `AI Gateway:Write` permissions.",
-            "insufficient_permission_gateway_write": "Insufficient permission to access the requested resource. Please check that your API token has `AI Gateway:Write` permissions.",
-            "insufficient_permission_model": "Insufficient permission to access the requested resource. Please check that your API token has `Workers AI:Read` permissions.",
-            "insufficient_permission_ai_run": "Insufficient permission to access the requested resource. Please check that your API token has `Workers AI:Write` and `AI Gateway:Run` permissions.",
-            "unknown": "Unexpected error"
+            "cannot_connect": "Failed to connect"
+        },
+        "abort": {
+            "already_configured": "This service is already configured."
         },
         "step": {
             "user": {
@@ -22,55 +15,79 @@
                 "data": {
                     "api_token": "API Token"
                 }
-            },
-            "account": {
-                "title": "Select Cloudflare Account",
-                "description": "Choose the Cloudflare account to use for AI completions.",
-                "data": {
-                    "account_id": "Account"
-                }
-            },
-            "gateway": {
-                "title": "Select AI Gateway",
-                "description": "Choose the Cloudflare Gateway to use for AI completions.",
-                "data": {
-                    "gateway_id": "Gateway"
-                }
-            },
-            "new_gateway": {
-                "title": "Create New AI Gateway",
-                "description": "Create a new Cloudflare AI Gateway to use for AI completions. Gateway should consist of alphanumeric characters and dashes, and must be unique within the account.",
-                "data": {
-                    "gateway_id": "Gateway ID"
-                }
-            },
-            "model": {
-                "title": "Select Model",
-                "description": "Pick a model to use. Different models have different capabilities and costs. See help doc for more info.",
-                "data": {
-                    "model": "Model"
-                }
             }
         }
     },
-    "options": {
-        "step": {
-            "init": {
-                "title": "Cloudflare AI Conversation Agent Options",
-                "description": "Configure the behavior of the Cloudflare AI Conversation Agent.",
-                "data": {
-                    "prompt": "Instruction Prompt",
-                    "llm_hass_api": "LLM Home Assistant API",
-                    "max_tokens": "Advanced: Max Tokens",
-                    "top_p": "Advanced: Top-P",
-                    "temperature": "Advanced: Temperature"
+    "config_subentries": {
+        "conversation": {
+            "initiate_flow": {
+                "user": "Add conversation agent",
+                "reconfigure": "Reconfigure conversation agent"
+            },
+            "entry_type": "Conversation agent",
+            "error": {
+                "cannot_connect": "Failed to connect",
+                "rate_limit_exceeded": "Rate limit exceeded. Please try again later.",
+                "unknown_api_error": "Unknown API error: code: {code}, message: {message}",
+                "no_models": "Cannot find supported models. Please check that your API token has `Workers AI:Read` permissions.",
+                "no_accounts": "No accounts found. Please check that your API token has `Account Settings:Read` permissions.",
+                "insufficient_permission_account": "Insufficient permission to access the requested resource. Please check that your API token is valid",
+                "insufficient_permission_gateway_read": "Insufficient permission to access the requested resource. Please check that your API token has `AI Gateway:Read` or `AI Gateway:Write` permissions.",
+                "insufficient_permission_gateway_write": "Insufficient permission to access the requested resource. Please check that your API token has `AI Gateway:Write` permissions.",
+                "insufficient_permission_model": "Insufficient permission to access the requested resource. Please check that your API token has `Workers AI:Read` permissions.",
+                "insufficient_permission_ai_run": "Insufficient permission to access the requested resource. Please check that your API token has `Workers AI:Write` and `AI Gateway:Run` permissions.",
+                "unknown": "Unexpected error"
+            },
+            "abort": {
+                "reconfigure_successful": "Reconfiguration successful.",
+                "entry_not_loaded": "Cannot add things while the configuration is disabled."
+            },
+            "step": {
+                "account": {
+                    "title": "Select Cloudflare Account",
+                    "description": "Choose the Cloudflare account to use for AI completions.",
+                    "data": {
+                        "account_id": "Account"
+                    }
                 },
-                "data_description": {
-                    "prompt": "Instruct how the LLM should respond. This can be a template.",
-                    "llm_hass_api": "The Home Assistant API to use for LLM integration. This is typically the default build-in `Assist`.",
-                    "max_tokens": "Maximum number of tokens per request. Leave blank for default.",
-                    "top_p": "Controls diversity via nucleus sampling. Leave blank for default.",
-                    "temperature": "Controls randomness in LLM output. Leave blank for default."
+                "gateway": {
+                    "title": "Select or Create AI Gateway",
+                    "description": "Choose the Cloudflare Gateway to use for AI completions. This allows you to monitor and control your AI usage.",
+                    "data": {
+                        "gateway_id": "Gateway"
+                    }
+                },
+                "new_gateway": {
+                    "title": "Create New AI Gateway",
+                    "description": "Create a new Cloudflare AI Gateway to use for AI completions. Gateway should consist of alphanumeric characters and dashes. It must be unique within the account.",
+                    "data": {
+                        "gateway_id": "Gateway ID"
+                    }
+                },
+                "model": {
+                    "title": "Select Model",
+                    "description": "Pick a model to use. Different models have different capabilities and costs. See help doc for more info.",
+                    "data": {
+                        "model": "Model"
+                    }
+                },
+                "advanced_options": {
+                    "title": "Cloudflare AI Conversation Agent Options",
+                    "description": "Configure the behavior of the Cloudflare AI Conversation Agent.",
+                    "data": {
+                        "prompt": "Instruction Prompt",
+                        "llm_haas_api": "LLM Home Assistant API",
+                        "max_tokens": "Advanced: Max Tokens",
+                        "top_p": "Advanced: Top-P",
+                        "temperature": "Advanced: Temperature"
+                    },
+                    "data_description": {
+                        "prompt": "Instruct how the LLM should respond. This can be a template.",
+                        "llm_haas_api": "The Home Assistant API to use for LLM integration. This is typically the default build-in `Assist`.",
+                        "max_tokens": "Maximum number of tokens per request. Leave blank for default.",
+                        "top_p": "Controls diversity via nucleus sampling. Leave blank for default.",
+                        "temperature": "Controls randomness in LLM output. Leave blank for default."
+                    }
                 }
             }
         }

@@ -10,11 +10,14 @@ import voluptuous as vol
 
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlow,
+    ConfigSubentryFlow,
+    SubentryFlowResult,
 )
 from homeassistant.const import CONF_API_TOKEN, CONF_LLM_HASS_API
+from homeassistant.core import callback
 from homeassistant.helpers import llm
 from homeassistant.helpers.selector import (
     SelectOptionDict,
@@ -36,29 +39,14 @@ from .const import (
 )
 
 # Constant for the default Cloudflare gateway name
-HA_CLOUDFLARE_GATEWAY_NAME = "ha-cloudflare-conversation-agent"
+HA_CLOUDFLARE_GATEWAY_NAME: str = "ha-cloudflare-conversation-agent"
+DEFAULT_MODEL: str = "@hf/nousresearch/hermes-2-pro-mistral-7b"
 
-STEP_USER_DATA_SCHEMA = vol.Schema({vol.Required(CONF_API_TOKEN): str})
-
-STEP_ACCOUNT_DATA_SCHEMA = vol.Schema({vol.Required(CONF_ACCOUNT_ID): str})
-
-STEP_ADVANCED_OPTIONS_SCHEMA = vol.Schema(
-    {
-        vol.Optional(CONF_LLM_HASS_API, default=llm.LLM_API_ASSIST): str,
-        vol.Optional(CONF_PROMPT, default=llm.DEFAULT_INSTRUCTIONS_PROMPT): str,
-        vol.Optional(CONF_MAX_TOKENS): int,
-        vol.Optional(CONF_TOP_P): float,
-        vol.Optional(CONF_TEMPERATURE): float,
-    }
-)
+STEP_USER_DATA_SCHEMA: vol.Schema = vol.Schema({vol.Required(CONF_API_TOKEN): str})
 
 
-class ConfigFlow(ConfigFlow, domain=DOMAIN):
+class CloudflareAiConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for cloudflare ai conversation assistant."""
-
-    def __init__(self) -> None:
-        """Initialize the config flow and create the AsyncCloudflare client once."""
-        self.client = None
 
     async def async_step_user(
         self, user_input: dict[str, str] | None = None
@@ -67,16 +55,21 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         description_placeholders: dict[str, str] = {}
         if user_input is not None:
-            api_token = user_input[CONF_API_TOKEN]
+            self._async_abort_entries_match(user_input)
             try:
-                # get a warning if we try call the constructor synchronously
-                self.client = await self.hass.async_add_executor_job(
-                    lambda: AsyncCloudflare(api_token=api_token)
+                client: AsyncCloudflare = await self.hass.async_add_executor_job(
+                    lambda: AsyncCloudflare(api_token=user_input[CONF_API_TOKEN])
                 )
-                self.context[CONF_API_TOKEN] = user_input[CONF_API_TOKEN]
-                return await self.async_step_account()
+                await client.accounts.list()  # Test the API connection
             except OSError:
                 errors[CONF_API_TOKEN] = "cannot_connect"
+            else:
+                self.context[CONF_API_TOKEN] = user_input[CONF_API_TOKEN]
+                return self.async_create_entry(
+                    title="Cloudflare AI",
+                    data={CONF_API_TOKEN: user_input[CONF_API_TOKEN]},
+                )  # TODO fetch and pass in subentry data
+
         return self.async_show_form(
             step_id="user",
             data_schema=STEP_USER_DATA_SCHEMA,
@@ -84,9 +77,83 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders=description_placeholders,
         )
 
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        """Return subentries supported by this integration."""
+        return {"conversation": ConversationSubentryFlowHandler}
+
+
+# TODO figure out why none of the steps labels are displaying
+class ConversationSubentryFlowHandler(ConfigSubentryFlow):
+    """Flow for managing conversation subentries."""
+
+    def __init__(self) -> None:
+        """Initialize options flow."""
+        self._is_new: bool = True
+
+    @property
+    def client(self) -> AsyncCloudflare:
+        """Return the Cloudflare client."""
+        return self._get_entry().runtime_data
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """New subentry."""
+        # abort if entry is not loaded
+        if self._get_entry().state != ConfigEntryState.LOADED:
+            return self.async_abort(reason="entry_not_loaded")
+        self._is_new = True
+        return await self.async_step_account()
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Reconfigure existing subentry."""
+        if self.source == "user":
+            return await self.async_step_user(user_input)
+        # abort if entry is not loaded
+        if self._get_entry().state != ConfigEntryState.LOADED:
+            return self.async_abort(reason="entry_not_loaded")
+        self._is_new = False
+        self.load_existing_values()
+        return await self.async_step_model()
+
+    def load_existing_values(self) -> None:
+        """Load existing subentry values into the context."""
+        self.context.setdefault(
+            CONF_ACCOUNT_ID, self._get_reconfigure_subentry().data.get(CONF_ACCOUNT_ID)
+        )
+        self.context.setdefault(
+            CONF_GATEWAY_ID, self._get_reconfigure_subentry().data.get(CONF_GATEWAY_ID)
+        )
+        self.context.setdefault(
+            CONF_MODEL, self._get_reconfigure_subentry().data.get(CONF_MODEL)
+        )
+        self.context.setdefault(
+            CONF_PROMPT, self._get_reconfigure_subentry().data.get(CONF_PROMPT)
+        )
+        self.context.setdefault(
+            CONF_LLM_HASS_API,
+            self._get_reconfigure_subentry().data.get(CONF_LLM_HASS_API),
+        )
+        self.context.setdefault(
+            CONF_MAX_TOKENS, self._get_reconfigure_subentry().data.get(CONF_MAX_TOKENS)
+        )
+        self.context.setdefault(
+            CONF_TOP_P, self._get_reconfigure_subentry().data.get(CONF_TOP_P)
+        )
+        self.context.setdefault(
+            CONF_TEMPERATURE,
+            self._get_reconfigure_subentry().data.get(CONF_TEMPERATURE),
+        )
+
     async def async_step_account(
         self, user_input: dict[str, str] | None = None
-    ) -> ConfigFlowResult:
+    ) -> SubentryFlowResult:
         """Let the user pick a Cloudflare account."""
         errors: dict[str, str] = {}
         description_placeholders: dict[str, str] = {}
@@ -122,14 +189,19 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="account",
             data_schema=vol.Schema(
-                {vol.Required(CONF_ACCOUNT_ID): vol.In(account_choices)}
+                {
+                    vol.Required(
+                        CONF_ACCOUNT_ID,
+                        default=self.context.get(CONF_ACCOUNT_ID),
+                    ): vol.In(account_choices)
+                }
             ),
             errors=errors,
         )
 
     async def async_step_gateway(
         self, user_input: dict[str, str] | None = None
-    ) -> ConfigFlowResult:
+    ) -> SubentryFlowResult:
         """Let the user pick or create an AI Gateway."""
         errors: dict[str, str] = {}
         description_placeholders: dict[str, str] = {}
@@ -163,7 +235,10 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_GATEWAY_ID, default=HA_CLOUDFLARE_GATEWAY_NAME
+                        CONF_GATEWAY_ID,
+                        default=self.context.get(
+                            CONF_GATEWAY_ID, HA_CLOUDFLARE_GATEWAY_NAME
+                        ),
                     ): vol.In(gateway_choices)
                 }
             ),
@@ -172,7 +247,7 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_new_gateway(
         self, user_input: dict[str, str] | None = None
-    ) -> ConfigFlowResult:
+    ) -> SubentryFlowResult:
         """Step to create a new AI Gateway."""
         errors: dict[str, str] = {}
         description_placeholders: dict[str, str] = {}
@@ -207,14 +282,19 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="new_gateway",
             data_schema=vol.Schema(
-                {vol.Required(CONF_GATEWAY_ID, default=HA_CLOUDFLARE_GATEWAY_NAME): str}
+                {
+                    vol.Required(
+                        CONF_GATEWAY_ID,
+                        default=HA_CLOUDFLARE_GATEWAY_NAME,
+                    ): str
+                }
             ),
             errors=errors,
         )
 
     async def async_step_model(
         self, user_input: dict[str, str] | None = None
-    ) -> ConfigFlowResult:
+    ) -> SubentryFlowResult:
         """Let the user pick a model from the Cloudflare API."""
         errors: dict[str, str] = {}
         description_placeholders: dict[str, str] = {}
@@ -242,25 +322,14 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
             errors[CONF_MODEL] = "no_models"
         if user_input is not None and not errors:
             self.context[CONF_MODEL] = user_input[CONF_MODEL]
-            return self.async_create_entry(
-                title=f"Cloudflare {self.context[CONF_MODEL]}",
-                data={
-                    CONF_API_TOKEN: self.context[CONF_API_TOKEN],
-                    CONF_ACCOUNT_ID: self.context[CONF_ACCOUNT_ID],
-                    CONF_GATEWAY_ID: self.context.get(CONF_GATEWAY_ID),
-                    CONF_MODEL: self.context[CONF_MODEL],
-                },
-                options={
-                    CONF_LLM_HASS_API: llm.LLM_API_ASSIST,
-                    CONF_PROMPT: llm.DEFAULT_INSTRUCTIONS_PROMPT,
-                },
-            )
+            return await self.async_step_advanced_options()
         return self.async_show_form(
             step_id="model",
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_MODEL, default="@cf/meta/llama-4-scout-17b-16e-instruct"
+                        CONF_MODEL,
+                        default=self.context.get(CONF_MODEL, DEFAULT_MODEL),
                     ): SelectSelector(
                         SelectSelectorConfig(
                             options=model_choices,
@@ -282,23 +351,10 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
                 return True
         return False
 
-    @staticmethod
-    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        """Return the options flow handler for this integration."""
-        return CloudflareAIOptionsFlowHandler(config_entry)
-
-
-class CloudflareAIOptionsFlowHandler(OptionsFlow):
-    """Handle options flow for Cloudflare AI Conversation Assistant."""
-
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        """Initialize the options flow handler."""
-        self.config_entry = config_entry
-
-    async def async_step_init(
+    async def async_step_advanced_options(
         self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Show the options form for updating configuration."""
+    ) -> SubentryFlowResult:
+        """Show the advanced options form for updating configuration."""
         errors: dict[str, str] = {}
         llm_api_options = [
             SelectOptionDict(value=api.id, label=api.name)
@@ -308,39 +364,89 @@ class CloudflareAIOptionsFlowHandler(OptionsFlow):
             {
                 vol.Required(
                     CONF_PROMPT,
-                    default=self.config_entry.options.get(
+                    default=self.context.get(
                         CONF_PROMPT, llm.DEFAULT_INSTRUCTIONS_PROMPT
                     ),
                 ): TemplateSelector(),
                 vol.Required(
                     CONF_LLM_HASS_API,
-                    default=self.config_entry.options.get(
-                        CONF_LLM_HASS_API, llm.LLM_API_ASSIST
-                    ),
+                    default=self.context.get(CONF_LLM_HASS_API, [llm.LLM_API_ASSIST]),
                 ): SelectSelector(
                     SelectSelectorConfig(
                         options=llm_api_options,
                         multiple=True,
                     )
                 ),
-                vol.Optional(
-                    CONF_MAX_TOKENS,
-                    default=self.config_entry.options.get(CONF_MAX_TOKENS),
-                ): int,
-                vol.Optional(
-                    CONF_TOP_P,
-                    default=self.config_entry.options.get(CONF_TOP_P),
-                ): float,
-                vol.Optional(
-                    CONF_TEMPERATURE,
-                    default=self.config_entry.options.get(CONF_TEMPERATURE),
-                ): float,
             }
         )
+        # schema doesnt like default None, unions types arent supported
+        # TODO use add_suggested_values_to_schema
+        # TODO check if advanced options are visible
+        if self.context.get(CONF_MAX_TOKENS):
+            options_schema = options_schema.extend(
+                {
+                    vol.Optional(
+                        CONF_MAX_TOKENS,
+                        default=self.context.get(CONF_MAX_TOKENS),
+                    ): int
+                }
+            )
+        else:
+            options_schema = options_schema.extend(
+                {
+                    vol.Optional(
+                        CONF_MAX_TOKENS,
+                    ): int
+                }
+            )
+        if self.context.get(CONF_TOP_P):
+            options_schema = options_schema.extend(
+                {
+                    vol.Optional(
+                        CONF_TOP_P,
+                        default=self.context.get(CONF_TOP_P),
+                    ): int
+                }
+            )
+        else:
+            options_schema = options_schema.extend(
+                {
+                    vol.Optional(
+                        CONF_TOP_P,
+                    ): int
+                }
+            )
+        if self.context.get(CONF_TEMPERATURE):
+            options_schema = options_schema.extend(
+                {
+                    vol.Optional(
+                        CONF_TEMPERATURE,
+                        default=self.context.get(CONF_TEMPERATURE),
+                    ): int
+                }
+            )
+        else:
+            options_schema = options_schema.extend(
+                {
+                    vol.Optional(
+                        CONF_TEMPERATURE,
+                    ): int
+                }
+            )
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            self.context.update(user_input)
+            if self._is_new:
+                return self.async_create_entry(
+                    title=f"Cloudflare {self.context[CONF_MODEL]}", data=self.context
+                )
+            return self.async_update_and_abort(
+                self._get_entry(),
+                self._get_reconfigure_subentry(),
+                title=f"Cloudflare {self.context[CONF_MODEL]}",
+                data=self.context,
+            )
         return self.async_show_form(
-            step_id="init",
+            step_id="advanced_options",
             data_schema=options_schema,
             errors=errors,
             description_placeholders={
@@ -350,4 +456,5 @@ class CloudflareAIOptionsFlowHandler(OptionsFlow):
                 "top_p": "Top-P",
                 "temperature": "Temperature",
             },
+            last_step=True,
         )

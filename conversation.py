@@ -41,7 +41,7 @@ from homeassistant.components.conversation.chat_log import (
     UserContent,
 )
 from homeassistant.components.conversation.models import ConversationInput
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import CONF_API_TOKEN, CONF_LLM_HASS_API, MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -59,7 +59,6 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
 _MAX_TOOL_ITERATIONS = 10
 
 
@@ -69,8 +68,14 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up conversation entities."""
-    agent = CloudflareAIConversationEntity(config_entry)
-    async_add_entities([agent])
+    for subentry in config_entry.subentries.values():
+        if subentry.subentry_type != "conversation":
+            continue
+
+        async_add_entities(
+            [CloudflareAIConversationEntity(config_entry, subentry)],
+            config_subentry_id=subentry.subentry_id,
+        )
 
 
 class CloudflareAIConversationEntity(
@@ -81,12 +86,13 @@ class CloudflareAIConversationEntity(
     _attr_has_entity_name = True
     _attr_supports_streaming = True
 
-    def __init__(self, entry: ConfigEntry) -> None:
+    def __init__(self, entry: ConfigEntry, subentry: ConfigSubentry) -> None:
         """Initialize the agent with the desired config."""
         self._entry = entry
-        self._attr_unique_id = entry.entry_id
-        self._attr_name = entry.title
-        if entry.options.get(CONF_LLM_HASS_API):
+        self._subentry = subentry
+        self._attr_unique_id = subentry.subentry_id
+        self._attr_name = subentry.title
+        if subentry.data.get(CONF_LLM_HASS_API):
             self._attr_supported_features = (
                 conversation.ConversationEntityFeature.CONTROL
             )
@@ -99,27 +105,27 @@ class CloudflareAIConversationEntity(
     @property
     def llm_hass_api(self) -> bool:
         """Return whether to enable Home Assistant API tool."""
-        return self._entry.options.get(CONF_LLM_HASS_API)
+        return self._subentry.data.get(CONF_LLM_HASS_API)
 
     @property
     def instruction(self) -> str | None:
         """Return the instruction prompt."""
-        return self._entry.options.get(CONF_PROMPT)
+        return self._subentry.data.get(CONF_PROMPT)
 
     @property
     def max_tokens(self) -> int | None:
         """Return the max tokens setting."""
-        return self._entry.options.get(CONF_MAX_TOKENS) or None
+        return self._subentry.data.get(CONF_MAX_TOKENS) or None
 
     @property
     def top_p(self) -> float | None:
         """Return the top-p setting."""
-        return self._entry.options.get(CONF_TOP_P) or None
+        return self._subentry.data.get(CONF_TOP_P) or None
 
     @property
     def temperature(self) -> float | None:
         """Return the temperature setting."""
-        return self._entry.options.get(CONF_TEMPERATURE) or None
+        return self._subentry.data.get(CONF_TEMPERATURE) or None
 
     @property
     def api_token(self) -> str | None:
@@ -129,12 +135,14 @@ class CloudflareAIConversationEntity(
     @property
     def model(self) -> str | None:
         """Return the model from config entry data."""
-        return self._entry.data.get(CONF_MODEL)
+        return self._subentry.data.get(CONF_MODEL)
 
     @property
     def client(self) -> AsyncOpenAI | None:
         """Return the OpenAI client for this config entry."""
-        return self.hass.data[DOMAIN].get(self._entry.entry_id)
+        return self.hass.data[DOMAIN].get(
+            self._entry.entry_id + self._subentry.subentry_id
+        )
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to Home Assistant."""
@@ -225,6 +233,7 @@ class CloudflareAIConversationEntity(
                 create_kwargs["temperature"] = self.temperature
             if self.max_tokens is not None:
                 create_kwargs["max_tokens"] = self.max_tokens
+            print(create_kwargs)
             try:
                 result: Stream[
                     ChatCompletionChunk
